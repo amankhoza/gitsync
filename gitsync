@@ -1,0 +1,70 @@
+#!/bin/bash
+
+function remote_git {
+    ssh $remote_host "git -C $remote_dir $1"
+}
+
+function remote_repo_has_uncommited_changes {
+    [[ $(remote_git "status --porcelain") ]]
+}
+
+function branch_exists_on_remote_machine {
+    [[ $(remote_git "show-ref refs/heads/$1") ]]
+}
+
+function error {
+    echo "$1, please fix this and try again."
+    exit 1
+}
+
+function check_if_remote_is_clean {
+    local_url=$(git config --get remote.origin.url)
+    remote_url=$(remote_git "config --get remote.origin.url")
+
+    if [ $local_url != $remote_url ]; then
+        error "You are tracking different remote URLs"
+    elif remote_repo_has_uncommited_changes; then
+        error "You have uncommited changes on your remote machine"
+    fi
+}
+
+function generate_patch_name {
+    if branch_exists_on_remote_machine $1; then
+        counter=1
+        while branch_exists_on_remote_machine $1_$counter; do
+            let counter=counter+1
+        done
+        echo $1_$counter
+    else
+        echo $1
+    fi
+}
+
+repo_name=$(basename `git rev-parse --show-toplevel`)
+gitsync_config_directory="$HOME/.gitsync"
+
+source $gitsync_config_directory/$repo_name/config
+
+local_branch=$(git rev-parse --abbrev-ref HEAD)
+
+check_if_remote_is_clean
+
+commits_ahead_of_master=$(git rev-list --left-right --count origin/master...HEAD | cut -f2)
+last_master_sha_before_changes=$(git rev-parse HEAD~$commits_ahead_of_master)
+
+patch_name=$(generate_patch_name $local_branch)
+
+echo "Creating new branch on remote machine: $patch_name"
+remote_git "checkout -b $patch_name $last_master_sha_before_changes"
+
+patch_file_name=gitsync_$(date "+%FT%T").patch
+patch_file_path=/tmp/$patch_file_name
+git format-patch origin/master --stdout > $patch_file_path
+
+echo "Sending patch $patch_file_name to remote machine..."
+scp $patch_file_path $remote_host:$patch_file_path
+
+echo "Applying patch $patch_file_name on remote machine..."
+remote_git "am $patch_file_path"
+
+echo "Complete"
