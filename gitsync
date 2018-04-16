@@ -54,6 +54,8 @@ last_master_sha_before_changes=$(git rev-parse HEAD~$commits_ahead_of_master)
 
 patch_name=$(generate_patch_name $local_branch)
 
+remote_git "fetch"
+
 echo "Creating new branch on remote machine: $patch_name"
 remote_git "checkout -b $patch_name $last_master_sha_before_changes"
 
