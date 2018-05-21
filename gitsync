@@ -4,6 +4,18 @@ function remote_git {
     ssh $remote_host "git -C $remote_dir $1"
 }
 
+function colour_remote_git {
+    ssh -t $remote_host "git -C $remote_dir $1"
+}
+
+function remote_run_command {
+    ssh -t $remote_host "cd $remote_dir && $1"
+}
+
+function local_repo_has_uncommited_changes {
+    [[ $(local_git "status --porcelain") ]]
+}
+
 function remote_repo_has_uncommited_changes {
     [[ $(remote_git "status --porcelain") ]]
 }
@@ -40,33 +52,99 @@ function generate_patch_name {
     fi
 }
 
+function usage() {
+    echo "Usage:" 1>&2
+    echo "gitsync status => git status of remote and current machine" 1>&2;
+    echo "gitsync pull   => pull from remote machine" 1>&2;
+    echo "gitsync push   => push to remote machine" 1>&2;
+    echo "gitsync push args: -c pass in command to run after pushing, -t push to temporary branch (delete it afterwards)"
+    exit 1;
+}
+
+function status {
+    echo -e "\n********** REMOTE MACHINE GIT STATUS **********\n"
+    colour_remote_git "status"
+    echo -e "\n********** LOCAL  MACHINE GIT STATUS **********\n"
+    git status
+    echo
+}
+
+function pull() {
+    commits_ahead_of_master=$(remote_git "rev-list --left-right --count origin/master...HEAD" | cut -f2)
+    last_master_sha_before_changes=$(remote_git "rev-parse HEAD~$commits_ahead_of_master")
+
+    timestamp=$(date +%Y-%m-%dT%H-%M-%S)
+    remote_branch=$(remote_git "rev-parse --abbrev-ref HEAD")
+    local_branch="gitsync_"$timestamp"_"$remote_branch
+
+    echo "Creating new branch on local machine: $local_branch"
+    git checkout -b $local_branch $last_master_sha_before_changes
+
+    echo "Pulling changes from remote machine..."
+    git pull $remote_host:$remote_dir
+
+    echo "Complete"
+}
+
+function push() {
+    command=$@
+
+    previous_remote_branch=$(remote_git "rev-parse --abbrev-ref HEAD")
+
+    local_branch=$(git rev-parse --abbrev-ref HEAD)
+
+    commits_ahead_of_master=$(git rev-list --left-right --count origin/master...HEAD | cut -f2)
+    last_master_sha_before_changes=$(git rev-parse HEAD~$commits_ahead_of_master)
+
+    patch_name=$(generate_patch_name $local_branch)
+
+    remote_git "fetch"
+
+    echo "Creating new branch on remote machine: $patch_name"
+    remote_git "checkout -b $patch_name $last_master_sha_before_changes"
+
+    patch_file_name=gitsync_$(date "+%FT%T").patch
+    patch_file_path=/tmp/$patch_file_name
+    git format-patch origin/master --stdout > $patch_file_path
+
+    echo "Sending patch $patch_file_name to remote machine..."
+    scp $patch_file_path $remote_host:$patch_file_path
+
+    echo "Applying patch $patch_file_name on remote machine..."
+    remote_git "am $patch_file_path"
+
+    if [ -n "$command" ]; then
+        echo "Running command on remote machine: $command"
+        remote_run_command "$command"
+        echo "Deleting temporary branch on remote machine..."
+        remote_git "checkout $previous_remote_branch"
+        remote_git "branch -D $patch_name"
+    fi
+
+    echo "Complete"
+}
+
 repo_name=$(basename `git rev-parse --show-toplevel`)
 gitsync_config_directory="$HOME/.gitsync"
 
 source $gitsync_config_directory/$repo_name/config
 
-local_branch=$(git rev-parse --abbrev-ref HEAD)
-
-check_if_remote_is_clean
-
-commits_ahead_of_master=$(git rev-list --left-right --count origin/master...HEAD | cut -f2)
-last_master_sha_before_changes=$(git rev-parse HEAD~$commits_ahead_of_master)
-
-patch_name=$(generate_patch_name $local_branch)
-
-remote_git "fetch"
-
-echo "Creating new branch on remote machine: $patch_name"
-remote_git "checkout -b $patch_name $last_master_sha_before_changes"
-
-patch_file_name=gitsync_$(date "+%FT%T").patch
-patch_file_path=/tmp/$patch_file_name
-git format-patch origin/master --stdout > $patch_file_path
-
-echo "Sending patch $patch_file_name to remote machine..."
-scp $patch_file_path $remote_host:$patch_file_path
-
-echo "Applying patch $patch_file_name on remote machine..."
-remote_git "am $patch_file_path"
-
-echo "Complete"
+case $1 in
+	status)
+		status
+		exit
+		;;
+	pull)
+        check_if_remote_is_clean
+		pull
+		exit
+		;;
+	push)
+        check_if_remote_is_clean
+		push ${@:2}
+		exit
+		;;
+	*)
+		usage
+		;;
+esac
