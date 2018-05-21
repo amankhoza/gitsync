@@ -20,6 +20,9 @@ function remote_repo_has_uncommited_changes {
     [[ $(remote_git "status --porcelain") ]]
 }
 
+function local_repo_has_uncommited_changes {
+    [[ $(git status --porcelain) ]]
+}
 function branch_exists_on_remote_machine {
     [[ $(remote_git "show-ref refs/heads/$1") ]]
 }
@@ -95,6 +98,7 @@ function push() {
 
     commits_ahead_of_master=$(git rev-list --left-right --count origin/master...HEAD | cut -f2)
     last_master_sha_before_changes=$(git rev-parse HEAD~$commits_ahead_of_master)
+    sha_with_latest_local_changes=$(git rev-parse HEAD)
 
     patch_name=$(generate_patch_name $local_branch)
 
@@ -105,6 +109,14 @@ function push() {
 
     patch_file_name=gitsync_$(date "+%FT%T").patch
     patch_file_path=/tmp/$patch_file_name
+
+    if [ -n "$command" ]; then
+        if local_repo_has_uncommited_changes; then
+            git add .
+            git commit -m "gitsync: temp commit"
+        fi
+    fi
+
     git format-patch origin/master --stdout > $patch_file_path
 
     echo "Sending patch $patch_file_name to remote machine..."
@@ -116,9 +128,12 @@ function push() {
     if [ -n "$command" ]; then
         echo "Running command on remote machine: $command"
         remote_run_command "$command"
+
         echo "Deleting temporary branch on remote machine..."
         remote_git "checkout $previous_remote_branch"
         remote_git "branch -D $patch_name"
+
+        git reset --mix $sha_with_latest_local_changes
     fi
 
     echo "Complete"
