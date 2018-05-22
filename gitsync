@@ -60,7 +60,7 @@ function usage() {
     echo "gitsync status => git status of remote and current machine" 1>&2;
     echo "gitsync pull   => pull from remote machine" 1>&2;
     echo "gitsync push   => push to remote machine" 1>&2;
-    echo "gitsync push args: -c pass in command to run after pushing, -t push to temporary branch (delete it afterwards)"
+    echo "gitsync push optional args: pass in command (in quotes) to run after pushing, this pushes to temporary branch (gets deleted afterwards)"
     exit 1;
 }
 
